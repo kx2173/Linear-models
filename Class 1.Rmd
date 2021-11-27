@@ -1,0 +1,168 @@
+---
+title: "Linear_models"
+author: "Ke Xu"
+date: "11/24/2021"
+output: github_document
+---
+
+```{r}
+library(tidyverse)
+library(p8105.datasets)
+
+set.seed(1)
+```
+
+Slect data 
+```{r}
+data("nyc_airbnb")
+
+nyc_airbnb = 
+  nyc_airbnb %>% 
+  mutate(stars = review_scores_location / 2) %>% 
+  rename(
+    borough = neighbourhood_group,
+    neighborhood = neighbourhood) %>% 
+  filter(borough != "Staten Island") %>% 
+  select(price, stars, borough, neighborhood, room_type)
+```
+
+Let's fit a linear model
+```{r}
+fit = lm(price ~ stars + borough, data = nyc_airbnb)
+fit
+
+#lot of other stuff
+summary(fit)
+
+fit %>% broom::tidy()
+```
+
+If you want to present output
+```{r}
+fit %>% 
+  broom::tidy() %>% 
+  mutate(term = str_replace(term, "borough", "Borough:")) %>% 
+  select(term, estimate, p.value) %>% 
+  knitr::kable(digits = 3)
+```
+
+## Diagnostics
+```{r}
+resid(fit) # this is super long, you can do the following instead
+modelr::add_residuals(nyc_airbnb, fit) %>% 
+  ggplot(aes(x = stars, y = resid)) +
+  geom_point()
+
+# another plot of diagnostics
+nyc_airbnb %>% 
+  modelr::add_residuals(fit) %>% 
+  ggplot(aes(x = borough, y = resid)) + geom_violin()
+
+# density plot of diagnostic
+resid(fit) # this is super long, you can do the following instead
+modelr::add_residuals(nyc_airbnb, fit) %>% 
+  ggplot(aes(x =  resid)) +
+  geom_density() +
+  xlim(-200, 200)
+```
+
+
+## Nesting data, interactions...
+```{r}
+nest_data = nyc_airbnb %>% 
+  lm(price ~ stars * borough + room_type * borough, data = .) %>% 
+  broom::tidy() %>% 
+  knitr::kable(digits = 3) # a huge bunch of variables
+```
+
+## Nesting...
+```{r}
+nyc_airbnb %>% 
+  relocate(borough) %>% 
+  nest(data = price:room_type) %>%  #see what it looks like
+  mutate(
+    lm_fits = map(.x = data, ~lm(price ~ stars + room_type, data = .x)), # showing .x is the x in function
+    lm_results = map(lm_fits, broom::tidy)
+  ) %>% 
+  select(borough, lm_results) %>% 
+  unnest(lm_results)
+```
+
+Look at neighbors in Manhattan...
+```{r}
+manhattan_lm_result_df = 
+  nyc_airbnb %>% 
+  filter(borough == "Manhattan") %>% 
+  select(-borough) %>% 
+  relocate(neighborhood) %>% 
+  nest(data = price:room_type) %>% 
+  mutate(
+    lm_fits = map(.x = data, ~lm(price ~ stars + room_type, data = .x)),
+    lm_results = map(lm_fits, broom::tidy)
+  ) %>% 
+  select(neighborhood, lm_results) %>% 
+  unnest(lm_results)
+
+manhattan_lm_result_df %>% 
+  filter(term == "stars") %>% 
+  ggplot(aes(x = estimate)) +
+  geom_density()
+```
+
+## Logistic regression
+```{r}
+nyc_airbnb %>% 
+  mutate(
+    expensive_apt = as.numeric(price > 500)
+  ) 
+```
+
+Let's fit a logistic regression for the binary outcome.
+```{r}
+logistic_fit =
+  glm(expensive_apt ~ stars + borough,
+      data = nyc_airbnb,
+      family = binomial()) # specify its distribution, this data is not normal distribution
+
+logistic_fit %>% broom::tidy() %>% 
+  mutate(
+    term = str_replace(term, "borough", "Borough: "),
+    estimate = exp(estimate)
+  ) %>% 
+  select(term, OR = estimate, p-value) # OR = odds ratio
+
+nyc_airbnb %>% 
+  modelr::add_predictions(logistic_fit) %>% 
+# By default, R and glm is assume that everything you look is in LOGISTIC style, so:
+  mutate(prediction = boot::inv.logit(prediction)) # convert value into non-logistic one
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
