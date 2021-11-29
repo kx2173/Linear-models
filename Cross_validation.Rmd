@@ -5,8 +5,189 @@ date: "11/28/2021"
 output: github_document
 ---
 
+Cross validation provides a way to compare the predictive performance of competing methods
 ```{r}
+library(tidyverse)
+library(modelr)
+library(mgcv)
 
+set.seed(1)
 ```
+
+```{r}
+# Non-linear distribution
+nonlin_df = 
+  tibble(
+    id = 1:100,
+    x = runif(100, 0, 1),
+    y = 1 - 10 * (x - .3) ^ 2 + rnorm(100, 0, .3)
+  )
+
+nonlin_df %>% 
+  ggplot(aes(x = x, y = y)) + 
+  geom_point()
+```
+
+Create splits(testing & training) by hand; plot; fit some models
+```{r}
+train_df = sample_n(nonlin_df, 80)
+test_df = anti_join(nonlin_df, train_df, by = "id")
+# anti_join function: find those data who are not overlap in these two data sets
+
+ggplot(train_df, aes(x = x, y = y)) + 
+  geom_point() + 
+  geom_point(data = test_df, color = "red")
+```
+
+Fit my models:
+```{r}
+# different types of models
+linear_mod = lm(y ~ x, data = train_df)
+smooth_mod = mgcv::gam(y ~ s(x), data = train_df) # s(), a smooth function
+wiggly_mod = mgcv::gam(y ~ s(x, k = 30), sp = 10e-6, data = train_df)
+
+train_df %>% 
+  add_predictions(smooth_mod) %>%  #calculate prediction by fitted model
+  ggplot(aes(x = x, y = y)) + geom_point() + 
+  geom_line(aes(y = pred), color = "red")
+```
+
+```{r}
+train_df %>% 
+  add_predictions(wiggly_mod) %>% 
+  ggplot(aes(x = x, y = y)) + geom_point() + 
+  geom_line(aes(y = pred), color = "red")
+```
+
+Quantify the results, compute root mean squared errors (RMSEs) for each model
+```{r}
+rmse(linear_mod, test_df) # use test data to find the differences between fitted value and predicted value, the smaller rmse is, the better model
+```
+
+## CV iteratively
+use `r modelr::crossv_mc`
+```{r}
+cv_df = 
+  crossv_mc(nonlin_df, 100) 
+
+cv_df %>% pull(train) %>% .[[1]] %>% as_tibble
+
+# OR, use 'map'
+cv_df = 
+  crossv_mc(nonlin_df, 100) %>% 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble)
+  )
+```
+
+Let's fit some models
+```{r}
+cv_df = 
+  cv_df %>% 
+  mutate(
+    linear_mod  = map(train, ~lm(y ~ x, data = .x)),
+    smooth_mod  = map(train, ~mgcv::gam(y ~ s(x), data = .x)),
+    wiggly_mod  = map(train, ~gam(y ~ s(x, k = 30), sp = 10e-6, data = .x))) %>% 
+  mutate(
+    rmse_linear = map2_dbl(linear_mod, test, ~rmse(model = .x, data = .y)),
+    rmse_smooth = map2_dbl(smooth_mod, test, ~rmse(model = .x, data = .y)),
+    rmse_wiggly = map2_dbl(wiggly_mod, test, ~rmse(model = .x, data = .y)))
+```
+
+Look at output
+```{r}
+# violin plot of rmse
+cv_df %>% 
+  select(starts_with("rmse")) %>% 
+  pivot_longer(
+    everything(), # means rmse_linear:rmse_wiggly
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+```
+
+```{r}
+# boxplot of rmse
+cv_df %>% 
+  select(starts_with("rmse")) %>% 
+  pivot_longer(
+    rmse_linear:rmse_wiggly,
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") %>% 
+  ggplot(aes(x = model, y = rmse)) + 
+  geom_boxplot()
+```
+
+
+## Child growth
+
+```{r}
+child_growth = read_csv("./class2_data/nepalese_children.csv")
+
+# The plots suggests some non-linearity, especially at the low end of the weight distribution. We’ll try three models: a linear fit; a piecewise linear fit; and a smooth fit using gam.
+```
+
+Consider models
+```{r}
+# For piecewise model
+child_growth =
+  child_growth %>% 
+  mutate(weight_cp = (weight > 7) * (weight - 7))
+
+linear_mod = lm(armc ~ weight, data = child_growth)
+pwl_mod    = lm(armc ~ weight + weight_cp, data = child_growth)
+smooth_mod = gam(armc ~ s(weight), data = child_growth)
+```
+
+```{r}
+child_growth_df = 
+  add_predictions(pwl_mod) %>% 
+  ggplot(aes(x = weight, y = armc)) +
+  geom_point(alpha = .5) +
+  geom_line(aes(y = pred), color = "red")
+```
+
+Use CV to compare models
+```{r}
+cv_df = 
+  crossv_mc(child_growth, 100) %>% 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble)
+  )
+```
+
+Fit models and extract RMSE
+```{r}
+cv_df = 
+  cv_df %>% 
+  mutate(
+    linear_mod  = map(train, ~lm(armc ~ weight, data = .x)),
+    pwl_mod     = map(train, ~lm(armc ~ weight + weight_cp, data = .x)),
+    smooth_mod  = map(train, ~gam(armc ~ s(weight), data = as_tibble(.x)))) %>% 
+  mutate(
+    rmse_linear = map2_dbl(linear_mod, test, ~rmse(model = .x, data = .y)),
+    rmse_pwl    = map2_dbl(pwl_mod, test, ~rmse(model = .x, data = .y)),
+    rmse_smooth = map2_dbl(smooth_mod, test, ~rmse(model = .x, data = .y)))
+```
+
+Look at RMSE distributions
+```{r}
+cv_df %>% 
+  select(starts_with("rmse")) %>% 
+  pivot_longer(
+    rmse_linear:rmse_smooth,
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x = model, y = rmse)) + geom_violin() # OR use boxplot()
+```
+
+
 
 
