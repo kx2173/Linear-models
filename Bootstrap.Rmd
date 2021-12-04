@@ -1,0 +1,173 @@
+---
+title: "Bootstrapping"
+author: "Ke Xu"
+date: "11/28/2021"
+output: github_document
+---
+
+```{r}
+library(tidyverse)
+library(p8105.datasets)
+library(patchwork)
+
+set.seed(1)
+```
+
+```{r}
+# Make two data sets
+n_samp = 250
+
+sim_df_const = 
+  tibble(
+    x = rnorm(n_samp, 1, 1),
+    error = rnorm(n_samp, 0, 1),
+    y = 2 + 3 * x + error
+  )
+
+sim_df_nonconst = sim_df_const %>% 
+  mutate(
+  error = error * .75 * x,
+  y = 2 + 3 * x + error
+)
+```
+
+Make a plot for each data set
+```{r}
+sim_df_const %>% 
+  ggplot(aes(x = x, y = y)) +
+  geom_point()
+```
+
+```{r}
+sim_df_const %>% 
+  lm(y~x, data = .) %>% 
+  broom::tidy()
+```
+## Now repeat the process, use bootstrapping
+```{r}
+#repeat it many times and make a regression for each sampling
+sim_df_nonconst %>% 
+  sample_frac(size = 1, replace = TRUE) %>% 
+  arrange(x) # give the same size = 250
+
+lm(y~x, data = bootstrap_sample)
+```
+
+Let's write a function
+```{r}
+boot_sample = function(df) {
+  sample_frac(df, size = 1, replace = TRUE)
+}
+```
+Now, we will make a tibble to keep track of everything
+```{r}
+boot_strap_df =
+  tibble(
+    strap_number = 1:1000,
+    strap_sample = rerun(1000, boot_sample(sim_df_nonconst))
+  )
+```
+
+From here...things are the same as "always"
+```{r}
+bootstrap_results = 
+  boot_strap_df %>% 
+  mutate(
+    models = map(.x = strap_sample, ~lm(y~x, data = .x)),
+    results = map(models, broom::tidy)
+  ) %>% 
+  select(strap_number, results) %>% 
+  unnest(results)
+
+bootstrap_results %>% 
+  ggplot(aes(x = estimate)) +
+  geom_histogram() +
+  facet_grid(~term, scales = "free")
+
+lm(y~x, data = sim_df_nonconst) %>% 
+  broom::tidy()
+# two inverse se value from upper code and lower code
+bootstrap_results %>% 
+  group_by(term) %>% 
+  summarize(
+    se = sd(estimate)
+  )
+```
+
+## Use `r modelr`
+```{r}
+sim_df_nonconst %>% 
+  bootstrap(n = 1000, id = "strap_number") %>% 
+  mutate(
+    models = map(x = strap, lm(y~x, data = .x)),
+    results = map(models, broom::tidy)
+  )
+```
+
+#Airbnb data
+```{r}
+data("nyc_airbnb")
+
+# Data cleaning
+nyc_airbnb = 
+  nyc_airbnb %>% 
+  mutate(stars = review_scores_location / 2) %>% 
+  rename(
+    borough = neighbourhood_group) %>% 
+  filter(borough != "Staten Island") %>% 
+  drop_na(price, stars) %>% 
+  select(price, stars, borough, neighborhood, room_type)
+```
+
+```{r}
+nyc_airbnb %>% 
+  ggplot(aes(x = stars, y = price, color = room_type)) + 
+  geom_point() 
+```
+
+Only focus on Manhattan
+```{r}
+airbnb_bootstrap_results = 
+  nyc_airbnb %>% 
+  filter(borough == "Manhattan") %>% 
+  bootstrap(n = 10, id = "strap_number") %>% 
+  mutate(
+    models = map(.x = strap, ~ lm(price ~ stars, data = .x)),
+    results = map(models, broom::tidy)) %>% 
+  select(strap_number, results) %>%
+  unnest(results)
+
+ggp_star_est = 
+  airbnb_bootstrap_results %>% 
+  filter(term == "stars") %>% 
+  ggplot(aes(estimate)) +
+  geom_density()
+
+ggp_scatter = 
+  nyc_airbnb %>% 
+  filter(borough == "Manhattan") %>% 
+  ggplot(aes(x = stars, y = price)) +
+  geom_point()
+
+ggp_star_est + ggp_scatter
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
